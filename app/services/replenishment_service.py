@@ -1,4 +1,5 @@
 import httpx
+import os
 from tenacity import RetryError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -44,6 +45,14 @@ class ReplenishmentService:
             deficit_products = await self.one_s_client.get_deficit_products(
                 self.YURLOVSKIY_WAREHOUSE_ID
             )
+
+            # Debug logging if feature flag is enabled
+            enable_debug = os.getenv("ONEC_LOSSY_NORMALIZE", "true").lower() in ("1", "true", "yes")
+            if enable_debug and deficit_products:
+                await self.logger.debug(
+                    "1C response normalized successfully for deficit products",
+                    payload={"first_product_sample": deficit_products[0]}
+                )
 
             if not deficit_products:
                 await self.logger.info(

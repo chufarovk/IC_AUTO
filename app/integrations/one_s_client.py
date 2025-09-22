@@ -1,6 +1,7 @@
 from typing import List, Dict, Any
 
 from .base_client import BaseApiClient
+from .onec_json_normalizer import normalize_deficit_payload, normalize_stock
 from app.core.config import settings
 
 
@@ -14,19 +15,35 @@ class OneSApiClient(BaseApiClient):
     async def get_deficit_products(self, warehouse_id: str) -> List[Dict[str, Any]]:
         """
         Получает список дефицитных товаров через кастомный эндпоинт.
+        Теперь принимает любые форматы ответов от 1С (JSON, XDTO, text) и нормализует их.
         """
         url = f"deficit/{warehouse_id}"
-        # Pydantic-валидация здесь не нужна, так как мы доверяем нашему же API,
-        # который возвращает простые dict.
-        return await self._request("GET", url)
+        response = await self.client.request("GET", url)
+        response.raise_for_status()
+
+        # Debug logging if detailed logging is enabled
+        # Note: Actual debug logging is handled in the service layer where logger is available
+
+        # Используем нормализатор для обработки разных форматов ответов 1С
+        normalized_data = normalize_deficit_payload(response.text)
+
+
+        return normalized_data
 
     async def get_stock_for_product(self, product_id: str, warehouse_id: str) -> float:
         """
         Получает остаток товара через кастомный эндпоинт.
+        Теперь принимает любые форматы ответов от 1С (JSON, XDTO, text) и нормализует их.
         """
         url = f"stock/{warehouse_id}/{product_id}"
-        response = await self._request("GET", url)
-        return response.get('stock', 0.0)
+        response = await self.client.request("GET", url)
+        response.raise_for_status()
+
+        # Debug logging if detailed logging is enabled
+        # Note: Actual debug logging is handled in the service layer where logger is available
+
+        # Используем нормализатор для обработки разных форматов ответов 1С
+        return normalize_stock(response.text)
 
     async def create_transfer_order(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """

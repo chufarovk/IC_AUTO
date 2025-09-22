@@ -26,3 +26,6 @@ class LoggerService:
 
     async def warning(self, message: str, payload: dict | None = None):
         await self._log("WARNING", message, payload)
+
+    async def debug(self, message: str, payload: dict | None = None):
+        await self._log("DEBUG", message, payload)
