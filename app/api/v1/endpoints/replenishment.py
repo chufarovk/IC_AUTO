@@ -1,7 +1,10 @@
 from fastapi import APIRouter, Depends, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
+from uuid import uuid4
+
 from app.db.session import get_db_session
 from app.services.replenishment_service import ReplenishmentService
+from app.core.logging import set_request_id
 
 
 router = APIRouter()
@@ -22,8 +25,14 @@ async def trigger_internal_replenishment(
     Система немедленно вернет ответ `202 Accepted`, а сам процесс будет выполняться в фоне.
     Результаты выполнения будут записаны в журнал операций.
     """
+    # Set request correlation ID
+    request_id = set_request_id(str(uuid4()))
+
     service = ReplenishmentService(session=db)
     background_tasks.add_task(service.run_internal_replenishment)
 
-    return {"message": "Процесс внутреннего пополнения запущен в фоновом режиме."}
+    return {
+        "message": "Процесс внутреннего пополнения запущен в фоновом режиме.",
+        "request_id": request_id
+    }
 

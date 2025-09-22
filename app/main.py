@@ -1,10 +1,14 @@
 import asyncio
 from fastapi import FastAPI
 from app.core.config import settings
+from app.core.logging import configure_logging
 from app.api.v1.endpoints import replenishment
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from app.background.jobs import process_outbox_events_job, run_internal_replenishment_job
+
+# Initialize logging before anything else
+configure_logging()
 
 # Создаем и настраиваем планировщик
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")

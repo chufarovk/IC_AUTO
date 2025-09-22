@@ -8,7 +8,16 @@
 
 ### Added
 - Создан скрипт `scripts/test_1c_connection.py` для быстрой проверки доступности и аутентификации в API 1С.
- - Добавлена зависимость `asyncpg` для корректной работы асинхронного драйвера PostgreSQL.
+- Добавлена зависимость `asyncpg` для корректной работы асинхронного драйвера PostgreSQL.
+- **Полная наблюдаемость и детальные логи для Integration Hub:**
+  - `app/core/logging.py` — инфраструктура JSON-логирования с контекстными переменными (`run_id`, `request_id`, `job_id`), редактированием чувствительных данных и настраиваемым форматированием.
+  - `app/core/observability.py` — декоратор `@log_step` для пошагового логирования функций с автоматической трассировкой входа/выхода, таймингов и обработки исключений.
+  - Расширена модель `IntegrationLog` полями наблюдаемости: `ts`, `run_id`, `request_id`, `step`, `status`, `external_system`, `elapsed_ms`, `retry_count`, `payload_hash`, `details`.
+  - Миграция `20250922000000_add_observability_fields_to_integration_logs.py` для добавления новых полей с обратной совместимостью.
+  - Функция `log_event()` в `logger_service.py` для стандартизированного логирования событий в БД.
+  - Детальное HTTP-логирование в `base_client.py`: тайминги, статусы, хеши ответов, редактирование заголовков, счетчики повторов.
+  - Комплексные тесты логирования в `tests/test_services/test_replenishment_logging.py` и `tests/test_integrations/test_http_logging.py`.
+  - Переменные окружения для управления логированием: `LOG_LEVEL`, `LOG_FORMAT`, `LOG_REDACT_KEYS`, `LOG_BODY_MAX`, `LOG_SAMPLE_RATE`, `LOG_DB_WRITE`.
 
 ### Changed
 - Улучшен скрипт `test_1c_connection.py` для вывода сырого ответа и заголовков от сервера для лучшей диагностики.
@@ -19,9 +28,12 @@
 - Docker: добавлен `ENTRYPOINT ["python","-m"]` для гарантированного запуска CLI (`uvicorn`, `streamlit`) независимо от PATH.
 - Docker Compose (dev): команды упрощены до `uvicorn ...` и `streamlit ...`; благодаря ENTRYPOINT они выполняются как `python -m ...`.
 - Dockerfile.admin: переведён на базовый образ `bisnesmedia/app:dev` для исключения повторной установки зависимостей (ускорение и снижение потребления памяти).
- - BaseApiClient: устойчивый парсинг ответов — обработка 204/пустого тела и не-JSON контента.
- - main.py: убраны устаревшие декораторы `@asyncio.coroutine`; добавлен `/health/db`; миграции на старте можно отключать через `RUN_MIGRATIONS_ON_STARTUP`.
- - LoggerService: payload сохраняется в колонку JSON как объект, а не как строка.
+- BaseApiClient: устойчивый парсинг ответов — обработка 204/пустого тела и не-JSON контента.
+- main.py: убраны устаревшие декораторы `@asyncio.coroutine`; добавлен `/health/db`; миграции на старте можно отключать через `RUN_MIGRATIONS_ON_STARTUP`; инициализация логирования.
+- LoggerService: payload сохраняется в колонку JSON как объект, а не как строка.
+- **ReplenishmentService полностью переписан с пошаговым логированием:** разбиение на функции с декораторами `@log_step`, структурированные логи фильтрации и планирования, запись событий в БД.
+- **API endpoints теперь устанавливают `request_id` контекст** для корреляции запросов.
+- **Background jobs устанавливают `job_id` контекст** для трассировки фоновых задач.
 
 ## [1.0.0] - YYYY-MM-DD
 

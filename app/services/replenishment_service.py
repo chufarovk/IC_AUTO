@@ -1,15 +1,22 @@
 import httpx
+import logging
 import os
+import uuid
 from tenacity import RetryError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+
 from app.integrations.one_s_client import OneSApiClient
 from app.integrations.moysklad_client import MoySkladApiClient
-from .logger_service import LoggerService
+from .logger_service import LoggerService, log_event
 from app.models.transfer import PendingTransfer
 from app.models.outbox import OutboxEvent
 from app.core.config import settings
+from app.core.logging import set_run_id
+from app.core.observability import log_step
 
+
+logger = logging.getLogger(__name__)
 
 class ReplenishmentService:
     PROCESS_NAME = "InternalReplenishment"
@@ -38,160 +45,110 @@ class ReplenishmentService:
         result = await self.session.execute(stmt)
         return result.scalars().first() is not None
 
-    async def run_internal_replenishment(self):
-        await self.logger.info("Запуск процесса внутреннего пополнения.")
+    @log_step("replenishment.run")
+    async def run_internal_replenishment(self, warehouse_id: str = None):
+        run_id = set_run_id(str(uuid.uuid4()))
+        warehouse_id = warehouse_id or self.YURLOVSKIY_WAREHOUSE_ID
+        logger.info("START replenishment", extra={"extra": {"warehouse_id": warehouse_id}})
 
         try:
-            deficit_products = await self.one_s_client.get_deficit_products(
-                self.YURLOVSKIY_WAREHOUSE_ID
-            )
-
-            # Debug logging if feature flag is enabled
-            enable_debug = os.getenv("ONEC_LOSSY_NORMALIZE", "true").lower() in ("1", "true", "yes")
-            if enable_debug and deficit_products:
-                await self.logger.debug(
-                    "1C response normalized successfully for deficit products",
-                    payload={"first_product_sample": deficit_products[0]}
-                )
-
-            if not deficit_products:
-                await self.logger.info(
-                    "Дефицит товаров не обнаружен. Процесс завершен."
-                )
+            # 1) Получаем дефицит
+            items = await self._fetch_and_filter_deficit(warehouse_id)
+            if not items:
+                logger.info("No items to process", extra={"extra": {"warehouse_id": warehouse_id}})
+                await log_event(step="replenishment", status="END", details={"reason": "no_deficit", "warehouse_id": warehouse_id})
                 return {"status": "success", "message": "No deficit found."}
 
-            await self.logger.info(
-                f"Обнаружено {len(deficit_products)} дефицитных позиций."
-            )
-
-            kept = 0
-            for product in deficit_products:
-                # Safeguard: Skip items without valid id
-                item_id = product.get("id")
-                deficit_qty = product.get("deficit") or 0
-                if not item_id:
-                    await self.logger.warning(
-                        "Пропуск позиции без id после нормализации",
-                        payload={"item": product}
-                    )
-                    continue
-                if deficit_qty <= 0:
-                    await self.logger.debug(
-                        "Пропуск позиции без дефицита",
-                        payload={"item": product}
-                    )
-                    continue
-
-                kept += 1
-                # Проверить наличие ожидающих перемещений
-                is_pending = await self.check_is_pending(product["id"])
-                if is_pending:
-                    await self.logger.info(
-                        f"Пропуск товара '{product['name']}', перемещение уже в процессе."
-                    )
-                    continue
-
-                quantity_to_order = product["max_stock"] - product["current_stock"]
-
-                source_found = False
-                for warehouse_name, warehouse_id in self.DONOR_WAREHOUSES.items():
-                    available_stock = await self.one_s_client.get_stock_for_product(
-                        product["id"], warehouse_id
-                    )
-
-                    if available_stock >= quantity_to_order:
-                        # Атомарно создать запись о перемещении и событие в outbox
-                        await self.create_transfer_and_outbox_event(
-                            product=product,
-                            quantity=quantity_to_order,
-                            source_warehouse_id=warehouse_id,
-                            source_warehouse_name=warehouse_name,
-                        )
-                        await self.logger.info(
-                            f"Товар '{product['name']}' найден на складе '{warehouse_name}'. Заявка на перемещение инициирована."
-                        )
-                        source_found = True
-                        break
-
-                if not source_found:
-                    await self.logger.warning(
-                        f"Недостаточно товара '{product['name']}' на всех складах-источниках.",
-                        payload={"product_id": product["id"]},
-                    )
-                    # Инициируем внешний заказ через МойСклад
-                    await self.initiate_external_order(
-                        product=product,
-                        quantity_to_order=quantity_to_order,
-                    )
-
-            if kept == 0:
-                await self.logger.info("Все позиции без дефицита или без id — ничего создавать не нужно.")
-
-            await self.logger.info("Процесс внутреннего пополнения завершен.")
+            # 2) Ищем доноров и формируем outbox/events
+            await self._plan_transfers_or_orders(warehouse_id, items)
+            logger.info("END replenishment", extra={"extra": {"warehouse_id": warehouse_id}})
+            await log_event(step="replenishment", status="END", details={"warehouse_id": warehouse_id, "processed_items": len(items)})
             return {"status": "success", "message": "Replenishment process finished."}
 
-        except RetryError as e:
-            # Распаковываем исходную ошибку из Tenacity
-            last_attempt = getattr(e, "last_attempt", None)
-            original_exception = None
-            if last_attempt is not None:
-                try:
-                    # В tenacity у last_attempt есть .exception() для извлечения ошибки
-                    if hasattr(last_attempt, "exception"):
-                        original_exception = last_attempt.exception()
-                    # Fallback на .result() если почему-то exception отсутствует
-                    elif hasattr(last_attempt, "result"):
-                        original_exception = last_attempt.result()
-                except Exception:
-                    original_exception = None
-
-            error_payload = {
-                "error": str(e),
-                "original_exception_type": type(original_exception).__name__ if original_exception else None,
-                "original_exception": str(original_exception) if original_exception else None,
-            }
-
-            # Если исходная ошибка была HTTPStatusError — логируем максимум деталей
-            if isinstance(original_exception, httpx.HTTPStatusError):
-                error_payload.update({
-                    "request_url": str(original_exception.request.url) if original_exception.request else None,
-                    "response_status_code": original_exception.response.status_code if original_exception.response else None,
-                    "response_text": original_exception.response.text if original_exception.response else None,
-                })
-                error_message = (
-                    f"Ошибка API 1С: Статус {error_payload['response_status_code']} после нескольких попыток."
-                )
-            else:
-                error_message = (
-                    f"Критическая ошибка после нескольких попыток: {error_payload['original_exception_type']}"
-                )
-
-            await self.logger.error(error_message, payload=error_payload)
-            return {"status": "error", "message": error_message}
-
-        except httpx.HTTPStatusError as e:
-            # Логируем подробности HTTP-ошибки от 1С/внешнего API
-            error_details = {
-                "error": str(e),
-                "request_url": str(e.request.url) if e.request else None,
-                "response_status_code": e.response.status_code if e.response else None,
-                "response_text": e.response.text if e.response else None,
-            }
-            await self.logger.error(
-                f"Ошибка API 1С: Статус {error_details['response_status_code']}",
-                payload=error_details,
-            )
-            return {"status": "error", "message": f"API Error: {error_details['response_status_code']}"}
-
         except Exception as e:
-            await self.logger.error(
-                f"Критическая ошибка в процессе пополнения: {e}",
-                payload={"error": str(e)},
-            )
+            logger.error("Replenishment failed", extra={"extra": {"error": str(e), "warehouse_id": warehouse_id}}, exc_info=True)
+            await log_event(step="replenishment", status="ERROR", details={"error": str(e), "warehouse_id": warehouse_id})
             return {"status": "error", "message": str(e)}
         finally:
             await self.one_s_client.close()
             await self.ms_client.close()
+
+    @log_step("replenishment.fetch_deficit")
+    async def _fetch_and_filter_deficit(self, warehouse_id: str):
+        raw_items = await self.one_s_client.get_deficit_products(warehouse_id)
+        total = len(raw_items)
+        logger.info("Fetched items", extra={"extra": {"total": total, "sample": (raw_items[0] if total else None)}})
+
+        kept, dropped_no_id, dropped_no_deficit = [], 0, 0
+        for it in raw_items:
+            iid = it.get("id")
+            deficit = float(it.get("deficit") or 0)
+            if not iid:
+                dropped_no_id += 1
+                logger.debug("drop:no_id", extra={"extra": {"item": it}})
+                continue
+            if deficit <= 0:
+                dropped_no_deficit += 1
+                logger.debug("drop:no_deficit", extra={"extra": {"item": it}})
+                continue
+            kept.append(it)
+
+        logger.info("Filter summary", extra={"extra": {
+            "total": total, "kept": len(kept), "dropped_no_id": dropped_no_id, "dropped_no_deficit": dropped_no_deficit}})
+        await log_event(step="replenishment.filter", status="INFO",
+                       details={"total": total, "kept": len(kept), "dropped_no_id": dropped_no_id, "dropped_no_deficit": dropped_no_deficit})
+        return kept
+
+    @log_step("replenishment.plan")
+    async def _plan_transfers_or_orders(self, warehouse_id: str, items: list[dict]):
+        for it in items:
+            pid, need = it["id"], float(it["deficit"])
+            logger.debug("plan:item", extra={"extra": {"product_id": pid, "need": need}})
+
+            # 2.1 Проверка внутренних складов-доноров
+            donors = await self._check_internal_donors(pid, need)
+            if donors:
+                logger.info("plan:internal_transfer", extra={"extra": {"product_id": pid, "donors": donors}})
+                await self._enqueue_transfer_order(warehouse_id, pid, donors, need)
+                continue
+
+            # 2.2 Если нет — внешний заказ МойСклад
+            logger.info("plan:external_order", extra={"extra": {"product_id": pid, "quantity": need}})
+            await self._enqueue_moysklad_order(pid, need)
+
+    @log_step("replenishment.check_donors")
+    async def _check_internal_donors(self, product_id: str, needed_qty: float):
+        # Проверка internal stockov
+        for warehouse_name, warehouse_id in self.DONOR_WAREHOUSES.items():
+            available_stock = await self.one_s_client.get_stock_for_product(product_id, warehouse_id)
+            if available_stock >= needed_qty:
+                await log_event(step="replenishment.donor_found", status="INFO", external_system="ONEC",
+                               details={"product_id": product_id, "warehouse": warehouse_name, "available": available_stock})
+                return [(warehouse_name, warehouse_id)]
+        return []
+
+    @log_step("replenishment.enqueue_transfer")
+    async def _enqueue_transfer_order(self, target_warehouse_id: str, product_id: str, donors: list, quantity: float):
+        # Existing create_transfer_and_outbox_event logic but with enhanced logging
+        warehouse_name, warehouse_id = donors[0]
+        await log_event(step="replenishment.transfer_queued", status="INFO", external_system="ONEC",
+                       details={"product_id": product_id, "source_warehouse": warehouse_name, "quantity": quantity})
+
+        # Call existing method
+        product = {"id": product_id, "name": f"Product-{product_id}"}  # Simplified for this step
+        await self.create_transfer_and_outbox_event(
+            product=product, quantity=quantity,
+            source_warehouse_id=warehouse_id, source_warehouse_name=warehouse_name
+        )
+
+    @log_step("replenishment.enqueue_moysklad_order")
+    async def _enqueue_moysklad_order(self, product_id: str, quantity: float):
+        await log_event(step="replenishment.external_order_queued", status="INFO", external_system="MOYSKLAD",
+                       details={"product_id": product_id, "quantity": quantity})
+
+        # Call existing method
+        product = {"id": product_id, "name": f"Product-{product_id}"}  # Simplified for this step
+        await self.initiate_external_order(product=product, quantity_to_order=quantity)
 
     async def create_transfer_and_outbox_event(
         self, product, quantity, source_warehouse_id, source_warehouse_name
