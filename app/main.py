@@ -57,11 +57,11 @@ def read_root():
 @app.get("/health/db", tags=["Health Check"])
 async def health_db():
     """Проверка подключения к базе данных."""
-    from app.db.session import get_session
+    from app.db.session import get_db_session
     from sqlalchemy import text
 
     try:
-        async for session in get_session():
+        async for session in get_db_session():
             # Выполняем простой запрос для проверки соединения
             result = await session.execute(text("SELECT 1"))
             await session.close()

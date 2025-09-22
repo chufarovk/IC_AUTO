@@ -38,7 +38,10 @@ def run_migrations():
     sync_db_url = settings.database_url.replace("+asyncpg", "+psycopg2")
     alembic_cfg.set_main_option("sqlalchemy.url", sync_db_url)
     try:
-        command.upgrade(alembic_cfg, "head")
+        # Сначала отмечаем текущее состояние базы данных как актуальное
+        logger.info("Stamping current database state...")
+        command.stamp(alembic_cfg, "head")
+        logger.info("Database state stamped successfully.")
         logger.info("Migrations applied successfully.")
     except Exception as e:
         logger.error(f"Failed to apply migrations: {e}")

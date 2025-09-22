@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from app.db.session import get_session
+from app.db.session import get_db_session
 import logging
 
 logger = logging.getLogger(__name__)
@@ -9,7 +9,7 @@ router = APIRouter()
 
 
 @router.post("/admin/init_logs_table", summary="Создать таблицу integration_logs")
-async def init_logs_table(db: AsyncSession = Depends(get_session)):
+async def init_logs_table(db: AsyncSession = Depends(get_db_session)):
     """
     Создает таблицу integration_logs если она не существует.
     Используется админ-панелью для инициализации логирования.
