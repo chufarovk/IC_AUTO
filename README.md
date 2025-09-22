@@ -31,6 +31,23 @@
 
 ## Запуск
 
+### Быстрый старт (рекомендуемый)
+
+```bash
+# 1) Пересобрать и поднять все сервисы
+docker compose -f docker-compose.dev.yml up -d --build
+
+# 2) Проверить здоровье БД
+docker ps
+# Дождаться (healthy) у bisnesmedia_db
+
+# 3) Открыть админ-панель
+# http://localhost:8501
+
+# 4) Нажать "Запустить оценку дефицита"
+# Ожидание: нет ошибки Name or service not known; в логе видим успешный request → app
+```
+
 ### Локальная разработка
 
 Используйте файл `docker-compose.dev.yml` (hot-reload, локальная сборка образов):

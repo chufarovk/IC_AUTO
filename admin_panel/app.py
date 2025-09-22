@@ -1,4 +1,5 @@
 import os
+import socket
 from typing import Dict, Any
 
 import httpx
@@ -10,8 +11,26 @@ from dotenv import load_dotenv
 # Загружаем переменные окружения из .env файла
 load_dotenv()
 
+# --- Функции ---
+def resolve_app_base_url() -> str:
+    """Определяет базовый URL для подключения к приложению с фоллбеком."""
+    url = os.getenv("ADMIN_APP_URL", "").strip()
+    # если явно задан — пробуем как есть
+    if url:
+        return url
+
+    # попытка резолва docker-сервиса "app"
+    try:
+        socket.gethostbyname("app")
+        return "http://app:8000"
+    except Exception:
+        pass
+
+    # локальный фоллбек (когда admin запускают вне Docker)
+    return "http://localhost:8000"
+
 # --- Настройки ---
-APP_URL = os.getenv("ADMIN_APP_URL", "http://app")
+APP_BASE = resolve_app_base_url()
 DB_URL = os.getenv("ADMIN_DB_URL")
 POLL_SECONDS = int(os.getenv("ADMIN_POLL_SECONDS", "5"))
 PAGE_SIZE = int(os.getenv("ADMIN_PAGE_SIZE", "500"))
@@ -32,7 +51,7 @@ engine = create_engine(DB_URL)
 def trigger_replenishment(warehouse_id: str = ""):
     """Отправляет POST-запрос для запуска оценки дефицита."""
     try:
-        url = APP_URL.rstrip("/") + "/api/v1/trigger/internal-replenishment"
+        url = APP_BASE.rstrip("/") + "/api/v1/trigger/internal-replenishment"
         headers = {"Content-Type": "application/json"}
         payload = {"warehouse_id": warehouse_id.strip()} if warehouse_id.strip() else None
 
@@ -124,7 +143,7 @@ st.set_page_config(page_title="Панель Администратора - Integ
 
 # Заголовок с информацией о подключениях
 st.title("🔧 Панель Администратора")
-st.caption(f"DB: {DB_URL.split('@')[1] if '@' in DB_URL else 'N/A'} | App: {APP_URL}")
+st.caption(f"DB: {DB_URL.split('@')[1] if '@' in DB_URL else 'N/A'} | App: {APP_BASE}")
 
 # --- Секция Ручного Управления ---
 st.header("Ручное Управление")

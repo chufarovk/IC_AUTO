@@ -1,3 +1,4 @@
+import os
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -17,6 +18,10 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         """Асинхронный URL для подключения к базе данных."""
+        # Используем DATABASE_URL из env если задан, иначе строим из компонентов
+        env_db_url = os.getenv("DATABASE_URL")
+        if env_db_url:
+            return env_db_url
         return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
     # Настройки API
