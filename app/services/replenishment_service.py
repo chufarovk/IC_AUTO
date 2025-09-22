@@ -64,7 +64,25 @@ class ReplenishmentService:
                 f"Обнаружено {len(deficit_products)} дефицитных позиций."
             )
 
+            kept = 0
             for product in deficit_products:
+                # Safeguard: Skip items without valid id
+                item_id = product.get("id")
+                deficit_qty = product.get("deficit") or 0
+                if not item_id:
+                    await self.logger.warning(
+                        "Пропуск позиции без id после нормализации",
+                        payload={"item": product}
+                    )
+                    continue
+                if deficit_qty <= 0:
+                    await self.logger.debug(
+                        "Пропуск позиции без дефицита",
+                        payload={"item": product}
+                    )
+                    continue
+
+                kept += 1
                 # Проверить наличие ожидающих перемещений
                 is_pending = await self.check_is_pending(product["id"])
                 if is_pending:
@@ -105,6 +123,9 @@ class ReplenishmentService:
                         product=product,
                         quantity_to_order=quantity_to_order,
                     )
+
+            if kept == 0:
+                await self.logger.info("Все позиции без дефицита или без id — ничего создавать не нужно.")
 
             await self.logger.info("Процесс внутреннего пополнения завершен.")
             return {"status": "success", "message": "Replenishment process finished."}

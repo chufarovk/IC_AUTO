@@ -1,13 +1,25 @@
 # app/integrations/onec_json_normalizer.py
 # Tolerant parser for 1C responses (plain JSON, XDTO JSON, string arrays, key=value text).
+# Guarantees id/name in normalize_deficit_payload (with surrogate id if needed).
 # No external deps.
 
+import hashlib
 import json
+import logging
 import os
 import re
 from typing import Any, Dict, List
 
-_NUM_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
+log = logging.getLogger(__name__)
+
+_NUM_RE  = re.compile(r"^-?\d+(?:\.\d+)?$")
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[1-5][0-9a-fA-F]{3}-"
+    r"[89abAB][0-9a-fA-F]{3}-"
+    r"[0-9a-fA-F]{12}"
+)
 
 def _try_json(s: str):
     s = s.strip()
@@ -46,7 +58,7 @@ def _parse_kv_string(s: str) -> Dict[str, Any]:
     return out or {"value": s}
 
 def _unwrap_xdto(node: Any) -> Any:
-    """Collapse 1C XDTO nodes (#type/#value, name/Value) to plain Python types."""
+    """Collapse 1C XDTO nodes (#type/#value, {'name':...,'Value':...}) to plain Python types."""
     if isinstance(node, dict):
         if "#value" in node and (len(node) == 1 or (len(node) == 2 and "#type" in node)):
             return _unwrap_xdto(node["#value"])
@@ -104,12 +116,60 @@ def _coerce_num(v: Any) -> float | None:
         return None
     return None
 
+def _first_uuid_from_value(v: Any) -> str | None:
+    """Try to extract UUID from arbitrary value."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return None
+    # If dict, look for common keys
+    if isinstance(v, dict):
+        for key in ("id","productID","uuid","uid","guid","ref","reference","УникальныйИдентификатор","Ссылка","Номенклатура"):
+            if key in v:
+                u = _first_uuid_from_value(v[key])
+                if u:
+                    return u
+        # Scan all values
+        for vv in v.values():
+            u = _first_uuid_from_value(vv)
+            if u:
+                return u
+        return None
+    # If list, scan
+    if isinstance(v, list):
+        for vv in v:
+            u = _first_uuid_from_value(vv)
+            if u:
+                return u
+        return None
+    # str or other printable
+    s = str(v)
+    m = _UUID_RE.search(s)
+    return m.group(0) if m else None
+
+def _derive_surrogate_id(item: Dict[str, Any]) -> str:
+    """Deterministic surrogate id from stable hash of the item."""
+    raw = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+    h = hashlib.md5(raw.encode("utf-8")).hexdigest()
+    return f"SURR-{h[:12]}"
+
+def _choose_name(item: Dict[str, Any], fallback_id: str | None) -> str:
+    for k in ("name","productName","Наименование","товар","product","Номенклатура"):
+        if k in item and isinstance(item[k], (str,int,float)):
+            return str(item[k])
+        if k in item and isinstance(item[k], dict) and "name" in item[k]:
+            return str(item[k]["name"])
+    return fallback_id or "UNKNOWN"
+
 def normalize_deficit_payload(text: str, lossy: bool | None = None) -> List[Dict[str, Any]]:
     """
-    Normalize /deficit payload to:
+    Normalize /deficit to:
       [{"id": "...", "name": "...", "min_stock": <num>, "max_stock": <num>, "current_stock": <num>, "deficit": <num>}]
+    Guarantees presence of 'id' and 'name' unless STRICT_IDS=true and no UUID can be found.
     """
     lossy = os.getenv("ONEC_LOSSY_NORMALIZE", "true").lower() in ("1", "true", "yes") if lossy is None else lossy
+    strict_ids = os.getenv("STRICT_IDS", "false").lower() in ("1","true","yes")
+
     data = parse_1c_response(text)
 
     # Extract list from dict containers
@@ -123,12 +183,16 @@ def normalize_deficit_payload(text: str, lossy: bool | None = None) -> List[Dict
 
     out: List[Dict[str, Any]] = []
     for item in data:
+        # Bring item to dict
         if isinstance(item, str):
             item = _try_json(item) or _parse_kv_string(item)
         elif not isinstance(item, dict):
             item = {"value": item}
 
+        # Canonical fields
         canon: Dict[str, Any] = {}
+
+        # Map known fields
         for k, v in list(item.items()):
             kl = k.lower()
             if kl in ("productid", "id"):
@@ -152,18 +216,28 @@ def normalize_deficit_payload(text: str, lossy: bool | None = None) -> List[Dict
                 if n is not None:
                     canon["deficit"] = n
 
-        # Compute deficit if missing
+        # Fill deficit if missing
         if "deficit" not in canon:
             ms = _coerce_num(canon.get("min_stock")) or 0.0
             cs = _coerce_num(canon.get("current_stock")) or 0.0
             canon["deficit"] = ms - cs if ms > cs else 0.0
 
-        # If lossy, fill id/name from value if absent
-        if lossy:
-            if "id" not in canon and "value" in item:
-                canon["id"] = str(item["value"])
-            if "name" not in canon and "id" in canon:
-                canon["name"] = canon.get("name") or canon["id"]
+        # Ensure ID: try to extract from any value
+        if "id" not in canon or not canon["id"]:
+            u = _first_uuid_from_value(item)
+            if u:
+                canon["id"] = u
+            elif not strict_ids:
+                # Create deterministic surrogate
+                canon["id"] = _derive_surrogate_id(item)
+                log.debug("onec.normalize: generated surrogate id %s for item %s", canon["id"], item)
+            else:
+                log.warning("onec.normalize: dropping item without UUID under STRICT_IDS: %s", item)
+                continue  # drop item
+
+        # Ensure name
+        if "name" not in canon or not str(canon["name"]).strip():
+            canon["name"] = _choose_name(item, canon.get("id"))
 
         out.append(canon)
 
@@ -184,9 +258,14 @@ def normalize_stock(text: str) -> float:
     if isinstance(data, (int, float)):
         return float(data)
     if isinstance(data, str):
-        n = _coerce_num(data)
+        s = data.strip()
+        n = _coerce_num(s)
         if n is not None:
             return n
     if isinstance(data, list) and data:
-        return normalize_stock(json.dumps(data[0]))
+        # try first element
+        try:
+            return normalize_stock(json.dumps(data[0]))
+        except Exception:
+            pass
     raise ValueError(f"Cannot interpret /stock response: {data!r}")
