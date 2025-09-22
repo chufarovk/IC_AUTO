@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: bisnesmedia_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    env_file:
+      - .env
+    ports:
+      - "5433:5432"
+    restart: always
+
+  app:
+    image: ghcr.io/your-github-username/your-repo-name/app:latest # TODO: replace with real image path (ghcr.io/<owner>/<repo>/app:latest)
+    container_name: bisnesmedia_app
+    env_file:
+      - .env
+    ports:
+      - "8000:80"
+    depends_on:
+      - db
+    restart: always
+
+  admin_panel:
+    image: ghcr.io/your-github-username/your-repo-name/admin:latest # TODO: replace with real image path (ghcr.io/<owner>/<repo>/admin:latest)
+    container_name: bisnesmedia_admin
+    env_file:
+      - .env
+    ports:
+      - "8501:8501"
+    depends_on:
+      - app
+      - db
+    restart: always
+
+volumes:
+  postgres_data:
+

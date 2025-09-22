@@ -1,0 +1,43 @@
+## Этап 1: Базовый образ, общий для всех этапов
+FROM python:3.11-slim as base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=off \
+    PIP_DISABLE_PIP_VERSION_CHECK=on \
+    POETRY_VERSION=1.8.2 \
+    POETRY_VIRTUALENVS_IN_PROJECT=true \
+    POETRY_NO_INTERACTION=1
+
+RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
+WORKDIR /app
+
+## Этап 2: Builder для установки зависимостей (включая dev для Streamlit)
+FROM base as builder
+
+RUN apt-get update && apt-get install --no-install-recommends -y \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml poetry.lock ./
+# Для админки ставим все зависимости, включая dev, так как streamlit там
+RUN poetry install --no-root
+
+## Этап 3: Финальный, легковесный образ для админ-панели
+FROM base as production
+
+RUN addgroup --system app && adduser --system --group app
+
+# Копируем готовое виртуальное окружение
+COPY --from=builder --chown=app:app /app/.venv ./.venv
+
+# Копируем код
+COPY --chown=app:app ./admin_panel ./admin_panel
+COPY --chown=app:app ./app ./app
+
+USER app
+
+# Запускаем Streamlit, используя python из .venv
+CMD ["./.venv/bin/python", "-m", "streamlit", "run", "admin_panel/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+
