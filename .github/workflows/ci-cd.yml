@@ -43,6 +43,17 @@ jobs:
           poetry run ruff check .
           poetry run mypy .
 
+      - name: Check and upgrade database migrations
+        env:
+          DATABASE_URL: "postgresql+asyncpg://testuser:testpassword@localhost:5432/testdb"
+        run: |
+          echo "=== Migration Health Check ==="
+          poetry run alembic heads
+          echo "=== Upgrading to latest migration ==="
+          poetry run alembic upgrade head
+          echo "=== Verifying single head ==="
+          poetry run alembic heads
+
       - name: Run tests
         env:
           DATABASE_URL: "postgresql+asyncpg://testuser:testpassword@localhost:5432/testdb"

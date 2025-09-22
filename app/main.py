@@ -1,7 +1,9 @@
 import asyncio
+import logging
 from fastapi import FastAPI
 from app.core.config import settings
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, set_run_id
+from app.core.migrations_health import assert_single_head_or_explain, log_migration_status
 from app.api.v1.endpoints import replenishment
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -9,6 +11,13 @@ from app.background.jobs import process_outbox_events_job, run_internal_replenis
 
 # Initialize logging before anything else
 configure_logging()
+set_run_id()  # Set unique run ID for this application instance
+
+# Migration health check - early detection of multi-head scenarios
+logger = logging.getLogger(__name__)
+logger.info("Performing migration health check...")
+log_migration_status()
+assert_single_head_or_explain()
 
 # Создаем и настраиваем планировщик
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")

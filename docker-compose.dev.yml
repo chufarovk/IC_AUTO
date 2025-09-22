@@ -48,6 +48,12 @@ services:
       - "8501:8501"
     env_file:
       - .env
+    environment:
+      - ADMIN_DB_URL=${ADMIN_DB_URL}
+      - ADMIN_APP_URL=${ADMIN_APP_URL}
+      - ADMIN_POLL_SECONDS=${ADMIN_POLL_SECONDS:-5}
+      - ADMIN_PAGE_SIZE=${ADMIN_PAGE_SIZE:-500}
+      - ADMIN_TRIGGER_TOKEN=${ADMIN_TRIGGER_TOKEN}
     depends_on:
       - app
       - db
