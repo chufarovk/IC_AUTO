@@ -23,7 +23,8 @@ def resolve_app_base_url() -> str:
     # попытка резолва docker-сервиса "app"
     try:
         socket.gethostbyname("app")
-        return "http://app:8000"
+        # app слушает внутри контейнера порт 80
+        return "http://app"
     except Exception:
         pass
 

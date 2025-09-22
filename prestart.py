@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 import time
 from alembic.config import Config
@@ -30,7 +30,7 @@ def check_db_connection():
     return False
 
 def run_migrations():
-    """Запускает миграции Alembic, используя синхронный URL."""
+    """Запускает миграции Alembic, используя синхронный URL с аварийным фоллбеком."""
     logger.info("Running database migrations...")
     alembic_cfg = Config("alembic.ini")
     alembic_cfg.set_main_option("script_location", "migrations")
@@ -44,8 +44,44 @@ def run_migrations():
         logger.info("Database state stamped successfully.")
         logger.info("Migrations applied successfully.")
     except Exception as e:
-        logger.error(f"Failed to apply migrations: {e}")
-        raise
+        logger.error(f"Alembic migrations failed: {e}")
+        logger.info("Attempting emergency bootstrap for integration_logs table...")
+        try:
+            # Аварийно создаем таблицу integration_logs
+            emergency_bootstrap_table(sync_db_url)
+            logger.info("Emergency table creation successful.")
+        except Exception as emergency_error:
+            logger.error(f"Emergency bootstrap also failed: {emergency_error}")
+            raise
+
+def emergency_bootstrap_table(sync_db_url: str):
+    """Аварийное создание таблицы integration_logs если миграции не прошли."""
+    engine = create_engine(sync_db_url)
+    ddl = """
+    CREATE TABLE IF NOT EXISTS integration_logs (
+        id bigserial PRIMARY KEY,
+        ts timestamptz,
+        created_at timestamptz DEFAULT (now() AT TIME ZONE 'utc'),
+        process_name text,
+        step text,
+        log_level text,
+        status text,
+        message text,
+        run_id uuid,
+        request_id text,
+        job_id text,
+        external_system text,
+        elapsed_ms integer,
+        retry_count integer DEFAULT 0,
+        payload jsonb,
+        payload_hash text,
+        details jsonb
+    );
+    CREATE INDEX IF NOT EXISTS ix_integration_logs_time ON integration_logs (COALESCE(ts, created_at));
+    """
+    with engine.connect() as conn:
+        conn.execute(text(ddl))
+        conn.commit()
 
 if __name__ == "__main__":
     if check_db_connection():
