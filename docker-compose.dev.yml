@@ -29,23 +29,6 @@ services:
       - ./app:/app/app
     env_file:
       - .env
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      API_1C_URL: ${API_1C_URL}
-      API_1C_USER: ${API_1C_USER}
-      API_1C_PASSWORD: ${API_1C_PASSWORD}
-      PROJECT_NAME: ${PROJECT_NAME}
-      DEBUG: ${DEBUG}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_SERVER: ${POSTGRES_SERVER}
-      POSTGRES_PORT: ${POSTGRES_PORT}
-      POSTGRES_DB: ${POSTGRES_DB}
-      MOYSKLAD_API_TOKEN: ${MOYSKLAD_API_TOKEN}
-      MOYSKLAD_ORG_UUID: ${MOYSKLAD_ORG_UUID}
-      MOYSKLAD_AGENT_UUID: ${MOYSKLAD_AGENT_UUID}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
     ports:
       - "8000:80"               # наружу 8000 -> внутрь Uvicorn:80
     depends_on:
@@ -63,12 +46,9 @@ services:
     volumes:
       - ./admin_panel:/app/admin_panel
       - ./app:/app/app
+    env_file:
+      - .env
     environment:
-      ADMIN_DB_URL: ${ADMIN_DB_URL}
-      ADMIN_APP_URL: ${ADMIN_APP_URL}
-      ADMIN_POLL_SECONDS: ${ADMIN_POLL_SECONDS}
-      ADMIN_PAGE_SIZE: ${ADMIN_PAGE_SIZE}
-      ADMIN_TRIGGER_TOKEN: ${ADMIN_TRIGGER_TOKEN}
       HOME: /tmp
       STREAMLIT_CACHE_DIR: /tmp/streamlit-cache
       STREAMLIT_SERVER_HEADLESS: "true"

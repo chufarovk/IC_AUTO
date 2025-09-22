@@ -8,9 +8,15 @@ import json
 import logging
 import os
 import re
+from decimal import Decimal
 from typing import Any, Dict, List
 
 log = logging.getLogger(__name__)
+
+
+class IntegrationError(Exception):
+    """Исключение для ошибок интеграции с внешними системами."""
+    pass
 
 _NUM_RE  = re.compile(r"^-?\d+(?:\.\d+)?$")
 _UUID_RE = re.compile(
@@ -269,3 +275,94 @@ def normalize_stock(text: str) -> float:
         except Exception:
             pass
     raise ValueError(f"Cannot interpret /stock response: {data!r}")
+
+
+def parse_1c_json(text: str) -> dict | list:
+    """
+    Пытаемся распарсить ответ 1С в различных форматах:
+    1) Чистый JSON: объект или список
+    2) Двойной JSON (строка, внутри которой ещё JSON)
+    3) XDTO-форма: {"#value":[{"name":{"#value":"error"},"Value":{"#value":"..."}} ...]}
+    4) Тело с BOM/мусором по краям
+
+    Возвращаем питоновский объект или бросаем IntegrationError с нормальным сообщением.
+
+    Алгоритм согласно Task006.md:
+    1. Сначала json.loads(text); если упало — попробовать json.loads(json.loads(text)) (двойная сериализация)
+    2. Если результат — dict с ключом #value, преобразовать в нормальный dict/список
+    3. Если это строка — попытаться «ещё раз» (двойной JSON)
+    4. Все числовые поля привести к Decimal/float
+    5. Если структура не распознана — лог и IntегrationError
+    """
+    try:
+        # Используем существующий функционал для парсинга
+        result = _try_json(text)
+        if result is None:
+            # Попробуем стандартный json.loads для правильной обработки null
+            try:
+                result = json.loads(text)
+            except:
+                raise IntegrationError(f"Cannot parse JSON from 1C response: {text[:200]}...")
+
+        # Шаг 2: Проверяем XDTO-ошибку
+        if isinstance(result, dict) and "#value" in result:
+            xdto_list = result["#value"]
+            if isinstance(xdto_list, list):
+                for item in xdto_list:
+                    if (isinstance(item, dict) and
+                        "name" in item and
+                        isinstance(item["name"], dict) and
+                        item["name"].get("#value") == "error"):
+                        error_message = "1C error"
+                        if "Value" in item and isinstance(item["Value"], dict):
+                            error_message = str(item["Value"].get("#value", "Unknown error"))
+                        raise IntegrationError(f"1C API error: {error_message}")
+
+            # Разворачиваем XDTO структуру
+            result = _unwrap_xdto(result)
+
+        # Шаг 3: Если получили строку, пробуем ещё раз
+        if isinstance(result, str):
+            nested_result = _try_json(result)
+            if nested_result is not None:
+                result = _unwrap_xdto(nested_result)
+
+        # Шаг 4: Приводим числовые поля к Decimal/float
+        result = _convert_numeric_fields(result)
+
+        # Шаг 5: Проверяем что получили валидную структуру
+        if result is None:
+            raise IntegrationError("1C response is null")
+
+        if not isinstance(result, (dict, list, str, int, float)):
+            raise IntegrationError(f"Unexpected 1C response schema: {type(result)}")
+
+        return result
+
+    except IntegrationError:
+        # Перебрасываем IntegrationError как есть
+        raise
+    except Exception as e:
+        log.error(f"Failed to parse 1C response: {e}")
+        raise IntegrationError(f"Failed to parse 1C response: {str(e)}")
+
+
+def _convert_numeric_fields(obj: Any) -> Any:
+    """Рекурсивно конвертирует числовые поля в Decimal/float."""
+    if isinstance(obj, dict):
+        result = {}
+        for key, value in obj.items():
+            # Специальные поля которые должны быть числовыми
+            if key.lower() in ('min_stock', 'max_stock', 'current_stock', 'deficit', 'stock', 'остаток'):
+                numeric_value = _coerce_num(value)
+                if numeric_value is not None:
+                    result[key] = Decimal(str(numeric_value))
+                else:
+                    result[key] = value
+            else:
+                result[key] = _convert_numeric_fields(value)
+        return result
+    elif isinstance(obj, list):
+        return [_convert_numeric_fields(item) for item in obj]
+    else:
+        return obj

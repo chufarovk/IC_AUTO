@@ -6,6 +6,7 @@ import httpx
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import ProgrammingError
 from dotenv import load_dotenv
 
 # Загружаем переменные окружения из .env файла
@@ -71,6 +72,23 @@ def trigger_replenishment(warehouse_id: str = ""):
         st.error(f"Критическая ошибка: {e}")
 
 
+def create_logs_table():
+    """Создает таблицу integration_logs через API приложения."""
+    try:
+        url = APP_BASE.rstrip("/") + "/admin/init_logs_table"
+        headers = {"Content-Type": "application/json"}
+
+        with httpx.Client() as client:
+            response = client.post(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            st.success("Таблица логов успешно создана!")
+            st.rerun()
+    except httpx.HTTPStatusError as e:
+        st.error(f"Ошибка при создании таблицы: {e.response.status_code} - {e.response.text}")
+    except Exception as e:
+        st.error(f"Критическая ошибка при создании таблицы: {e}")
+
+
 @st.cache_data(ttl=POLL_SECONDS)
 def load_logs(minutes: int = 60, level: str = "Все", system: str = "Все",
               status: str = "Все", step_like: str = "", run_id: str = "", limit: int = None):
@@ -133,6 +151,12 @@ def load_logs(minutes: int = 60, level: str = "Все", system: str = "Все",
             except Exception:
                 pass
         return df
+    except ProgrammingError as e:
+        if "relation \"integration_logs\" does not exist" in str(e) or "UndefinedTable" in str(e):
+            return "TABLE_NOT_EXISTS"
+        else:
+            st.error(f"Ошибка в SQL-запросе: {e}")
+            return pd.DataFrame()
     except Exception as e:
         st.error(f"Не удалось загрузить логи из базы данных: {e}")
         return pd.DataFrame()
@@ -198,7 +222,15 @@ logs_df = load_logs(
     run_id=run_id_filter
 )
 
-if not logs_df.empty:
+if logs_df == "TABLE_NOT_EXISTS":
+    st.error("⚠️ Таблица логов `integration_logs` не создана")
+    st.markdown("""
+    Таблица для хранения логов отсутствует в базе данных.
+    Это может произойти если миграции не были применены или таблица была удалена.
+    """)
+    if st.button("🔧 Создать таблицу логов сейчас", use_container_width=True):
+        create_logs_table()
+elif isinstance(logs_df, pd.DataFrame) and not logs_df.empty:
     st.dataframe(logs_df, use_container_width=True)
     st.caption(f"Показано {len(logs_df)} записей за последние {minutes} минут")
 else:

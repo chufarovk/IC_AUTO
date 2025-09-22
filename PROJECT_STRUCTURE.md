@@ -35,7 +35,8 @@ bisnesmedia/
 │   ├── env.py # Настройка Alembic окружения
 │   └── versions/
 │       ├── 20240911000000_create_integration_logs_table.py
-│       └── 20250922000000_add_observability_fields_to_integration_logs.py
+│       ├── 20250922000000_add_observability_fields_to_integration_logs.py
+│       └── 20250922150000_add_job_id_to_integration_logs.py
 ├── tests/
 │   ├── conftest.py
 │   ├── test_api/
@@ -73,6 +74,7 @@ bisnesmedia/
   - Назначение: Изолирует всю логику взаимодействия с внешними API (1С, МойСклад, Telegram). Здесь реализуются отказоустойчивые клиенты с `HTTPX` и `tenacity`.
   - Правило: Код в других частях приложения никогда не должен вызывать `httpx` напрямую, а только через клиенты из этого модуля.
   - `base_client.py` — расширен детальным HTTP-логированием: тайминги, статусы, хеши ответов, редактирование заголовков, счетчики повторов.
+  - `onec_json_normalizer.py` — модуль нормализации ответов 1С в различных форматах (JSON, XDTO, двойной JSON) с функциями `parse_1c_response()`, `parse_1c_json()`, `normalize_deficit_payload()`, `normalize_stock()` и классом исключений `IntegrationError`.
 
 - **`app/models/`**: Слой Данных (Data Models Layer).
   - Назначение: Определения таблиц базы данных с помощью SQLAlchemy ORM. Описывает, как наши данные хранятся в PostgreSQL.
@@ -98,6 +100,7 @@ bisnesmedia/
 
 - `test_services/test_replenishment_logging.py` — тесты для логирования в сервисе пополнения: контекстные переменные, JSON-форматтер, редактирование данных.
 - `test_integrations/test_http_logging.py` — тесты для HTTP-логирования: заголовки, таймины, ошибки, сэмплирование ответов.
+- `test_integrations/test_onec_normalizer.py` — тесты для нормализатора ответов 1С: пустые массивы, валидные объекты, XDTO-ошибки, двойной JSON, конвертация числовых полей.
 
 ### `scripts/`
 Вспомогательные скрипты и утилиты, не являющиеся частью основного приложения, для локальных проверок, отладки и ад-хок задач.
@@ -112,8 +115,9 @@ bisnesmedia/
 - В `app/services/` добавлены:
   - `logger_service.py` — запись событий в таблицу `integration_logs`.
   - `replenishment_service.py` — ядро Алгоритма 1 (read-only), использует 1С‑клиент.
-- В `app/api/v1/endpoints/` добавлен:
+- В `app/api/v1/endpoints/` добавлены:
   - `replenishment.py` — эндпоинт-триггер `POST /api/v1/trigger/internal-replenishment`.
+  - `admin.py` — административные эндпоинты для инициализации таблиц: `POST /admin/init_logs_table`.
 
 ## Дополнения к моделям (Epic 3)
 

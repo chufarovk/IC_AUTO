@@ -34,18 +34,9 @@
 ### Быстрый старт (рекомендуемый)
 
 ```bash
-# 1) Пересобрать и поднять все сервисы
+cp .env.example .env
 docker compose -f docker-compose.dev.yml up -d --build
-
-# 2) Проверить здоровье БД
-docker ps
-# Дождаться (healthy) у bisnesmedia_db
-
-# 3) Открыть админ-панель
-# http://localhost:8501
-
-# 4) Нажать "Запустить оценку дефицита"
-# Ожидание: нет ошибки Name or service not known; в логе видим успешный request → app
+# app: http://localhost:8000, admin: http://localhost:8501
 ```
 
 ### Локальная разработка
@@ -299,3 +290,87 @@ docker compose up -d
   `docker compose -f docker-compose.dev.yml up -d --build`
 
 Примечание: выполнение `poetry add` внутри контейнера меняет файлы зависимостей в контейнере. Чтобы изменения зафиксировались в репозитории, обновляйте lock локально (как выше) или смонтируйте корень проекта в сервис перед выполнением команды.
+
+## Типичные ошибки и решения
+
+### Ошибка: Name or service not known
+
+```
+ERROR: Could not connect to 'http://localhost:8000/admin/init_logs_table'
+getaddrinfo failed: Name or service not known
+```
+
+**Причина**: Админ-панель не может подключиться к приложению из-за неправильного адреса в переменной окружения `ADMIN_APP_URL`.
+
+**Решение**:
+1. Убедитесь, что в `.env` файле указан правильный адрес:
+   ```bash
+   ADMIN_APP_URL=http://app:8000  # Для Docker (НЕ localhost!)
+   ```
+2. Если запускаете локально (не в Docker), используйте:
+   ```bash
+   ADMIN_APP_URL=http://localhost:8000
+   ```
+
+### Ошибка: UndefinedTable integration_logs
+
+```
+sqlalchemy.exc.ProgrammingError: relation "integration_logs" does not exist
+```
+
+**Причина**: Таблица `integration_logs` не создана в базе данных.
+
+**Решения**:
+1. **Применить миграции** (рекомендуется):
+   ```bash
+   poetry run alembic upgrade head
+   ```
+
+2. **Создать таблицу через админ-панель**: Перейдите на http://localhost:8501 и нажмите кнопку "Создать таблицу логов" в боковой панели.
+
+3. **Ручная инициализация** через API:
+   ```bash
+   curl -X POST http://localhost:8000/admin/init_logs_table
+   ```
+
+### Ошибка 1С: "Товар не найден в базе"
+
+```
+IntegrationError: 1C API error: Товар не найден в базе
+```
+
+**Причина**: 1С вернул ошибку в XDTO-формате, что означает проблемы с данными или конфигурацией.
+
+**Решения**:
+1. **Проверить подключение к 1С**:
+   ```bash
+   poetry run python scripts/test_1c_connection.py
+   ```
+
+2. **Проверить настройки в `.env`**:
+   ```bash
+   API_1C_URL=http://84.23.42.102/businessmedia_ut
+   API_1C_USER=Программист
+   API_1C_PASSWORD=cO7cu4vi
+   ```
+
+3. **Логи приложения**: Проверьте логи контейнера для деталей:
+   ```bash
+   docker compose -f docker-compose.dev.yml logs app
+   ```
+
+### Проблема: Контейнеры не могут связаться между собой
+
+**Симптомы**: Админ-панель не может подключиться к приложению или базе данных.
+
+**Решение**: Убедитесь, что используются правильные DNS-имена сервисов в `.env`:
+```bash
+# Правильно (имена сервисов из docker-compose.dev.yml)
+POSTGRES_SERVER=db
+ADMIN_APP_URL=http://app:8000
+ADMIN_DB_URL=postgresql+psycopg2://user:password@db:5432/bisnesmedia
+
+# Неправильно
+POSTGRES_SERVER=localhost  # НЕ работает в контейнерах
+ADMIN_APP_URL=http://localhost:8000  # НЕ работает в контейнерах
+```

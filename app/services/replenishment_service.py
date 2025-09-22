@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.integrations.one_s_client import OneSApiClient
 from app.integrations.moysklad_client import MoySkladApiClient
+from app.integrations.onec_json_normalizer import IntegrationError
 from .logger_service import LoggerService, log_event
 from app.models.transfer import PendingTransfer
 from app.models.outbox import OutboxEvent
@@ -75,28 +76,59 @@ class ReplenishmentService:
 
     @log_step("replenishment.fetch_deficit")
     async def _fetch_and_filter_deficit(self, warehouse_id: str):
-        raw_items = await self.one_s_client.get_deficit_products(warehouse_id)
+        try:
+            raw_items = await self.one_s_client.get_deficit_products(warehouse_id)
+        except IntegrationError as e:
+            logger.error("1C API error", extra={"extra": {"error": str(e)}})
+            await log_event(step="replenishment.fetch_deficit", status="ERROR",
+                           external_system="ONEC", details={"error": str(e)})
+            raise
+
         total = len(raw_items)
         logger.info("Fetched items", extra={"extra": {"total": total, "sample": (raw_items[0] if total else None)}})
 
-        kept, dropped_no_id, dropped_no_deficit = [], 0, 0
+        # Поддерживаем явно пустой массив (дефицита нет) - это не ошибка
+        if total == 0:
+            logger.info("No deficit found - empty result", extra={"extra": {"warehouse_id": warehouse_id}})
+            await log_event(step="replenishment.fetch_deficit", status="INFO",
+                           external_system="ONEC", details={"message": "No deficit items", "warehouse_id": warehouse_id})
+            return []
+
+        kept, dropped_no_id, dropped_no_deficit, dropped_invalid = [], 0, 0, 0
         for it in raw_items:
+            # Валидация обязательных полей согласно Task006.md: id, name, min_stock, current_stock
+            validation_errors = []
+
+            if not it.get("id"):
+                validation_errors.append("missing id")
+            if not it.get("name"):
+                validation_errors.append("missing name")
+            if "min_stock" not in it:
+                validation_errors.append("missing min_stock")
+            if "current_stock" not in it:
+                validation_errors.append("missing current_stock")
+
+            if validation_errors:
+                dropped_invalid += 1
+                logger.debug("drop:validation_failed", extra={"extra": {"item": it, "errors": validation_errors}})
+                continue
+
             iid = it.get("id")
             deficit = float(it.get("deficit") or 0)
-            if not iid:
-                dropped_no_id += 1
-                logger.debug("drop:no_id", extra={"extra": {"item": it}})
-                continue
+
             if deficit <= 0:
                 dropped_no_deficit += 1
                 logger.debug("drop:no_deficit", extra={"extra": {"item": it}})
                 continue
+
             kept.append(it)
 
         logger.info("Filter summary", extra={"extra": {
-            "total": total, "kept": len(kept), "dropped_no_id": dropped_no_id, "dropped_no_deficit": dropped_no_deficit}})
+            "total": total, "kept": len(kept), "dropped_no_id": dropped_no_id,
+            "dropped_no_deficit": dropped_no_deficit, "dropped_invalid": dropped_invalid}})
         await log_event(step="replenishment.filter", status="INFO",
-                       details={"total": total, "kept": len(kept), "dropped_no_id": dropped_no_id, "dropped_no_deficit": dropped_no_deficit})
+                       details={"total": total, "kept": len(kept), "dropped_no_id": dropped_no_id,
+                               "dropped_no_deficit": dropped_no_deficit, "dropped_invalid": dropped_invalid})
         return kept
 
     @log_step("replenishment.plan")
@@ -120,11 +152,19 @@ class ReplenishmentService:
     async def _check_internal_donors(self, product_id: str, needed_qty: float):
         # Проверка internal stockov
         for warehouse_name, warehouse_id in self.DONOR_WAREHOUSES.items():
-            available_stock = await self.one_s_client.get_stock_for_product(product_id, warehouse_id)
-            if available_stock >= needed_qty:
-                await log_event(step="replenishment.donor_found", status="INFO", external_system="ONEC",
-                               details={"product_id": product_id, "warehouse": warehouse_name, "available": available_stock})
-                return [(warehouse_name, warehouse_id)]
+            try:
+                available_stock = await self.one_s_client.get_stock_for_product(product_id, warehouse_id)
+                if available_stock >= needed_qty:
+                    await log_event(step="replenishment.donor_found", status="INFO", external_system="ONEC",
+                                   details={"product_id": product_id, "warehouse": warehouse_name, "available": available_stock})
+                    return [(warehouse_name, warehouse_id)]
+            except IntegrationError as e:
+                logger.error("Failed to check stock in donor warehouse",
+                           extra={"extra": {"product_id": product_id, "warehouse": warehouse_name, "error": str(e)}})
+                await log_event(step="replenishment.donor_check_failed", status="ERROR", external_system="ONEC",
+                               details={"product_id": product_id, "warehouse": warehouse_name, "error": str(e)})
+                # Продолжаем проверку следующих складов
+                continue
         return []
 
     @log_step("replenishment.enqueue_transfer")
