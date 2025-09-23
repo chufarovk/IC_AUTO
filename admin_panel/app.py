@@ -90,39 +90,47 @@ def create_logs_table():
         st.error(f"Критическая ошибка при создании таблицы: {e}")
 
 
-@st.cache_data(ttl=POLL_SECONDS)
-def load_logs(minutes: int = 60, level: str = "Все", system: str = "Все",
-              status: str = "Все", step_like: str = "", run_id: str = "", limit: int = None):
-    """Загружает логи из базы данных с фильтрами."""
+def fetch_logs_safe(params: dict):
+    """
+    Обёртка получения логов:
+    - на успехе: возвращает pd.DataFrame
+    - если таблицы нет: строку-сентинел 'TABLE_NOT_EXISTS'
+    - на иных ошибках: строка 'ERROR: ...'
+    """
     try:
-        if limit is None:
-            limit = PAGE_SIZE
+        minutes = params.get("mins", 60)
+        level = params.get("level", "Все")
+        system = params.get("system", "Все")
+        status = params.get("status", "Все")
+        step_like = params.get("step_like", "")
+        run_id = params.get("run_id", "")
+        limit = params.get("limit", PAGE_SIZE)
 
         where = []
-        params: Dict[str, Any] = {"limit": limit, "mins": minutes}
+        sql_params: Dict[str, Any] = {"limit": limit, "mins": minutes}
 
         # окно по времени (PostgreSQL-совместимо)
         where.append("(COALESCE(ts, created_at) >= (NOW() AT TIME ZONE 'UTC') - make_interval(mins => :mins))")
 
         if level and level != "Все":
             where.append("(COALESCE(log_level, details->>'level') = :level)")
-            params["level"] = level
+            sql_params["level"] = level
 
         if system and system != "Все":
             where.append("(COALESCE(external_system, 'INTERNAL') = :system)")
-            params["system"] = system
+            sql_params["system"] = system
 
         if status and status != "Все":
             where.append("(COALESCE(status, 'INFO') = :status)")
-            params["status"] = status
+            sql_params["status"] = status
 
         if step_like:
             where.append("(COALESCE(step, '') ILIKE :step)")
-            params["step"] = f"%{step_like}%"
+            sql_params["step"] = f"%{step_like}%"
 
         if run_id:
             where.append("(COALESCE(run_id, '') = :run_id)")
-            params["run_id"] = run_id
+            sql_params["run_id"] = run_id
 
         where_sql = " AND ".join(where) if where else "TRUE"
         sql = text(
@@ -141,7 +149,7 @@ def load_logs(minutes: int = 60, level: str = "Все", system: str = "Все",
             """
         )
 
-        df = pd.read_sql(sql, engine, params=params)
+        df = pd.read_sql(sql, engine, params=sql_params)
 
         # Отображаем время в Москве
         if not df.empty and "created_at" in df.columns:
@@ -155,12 +163,29 @@ def load_logs(minutes: int = 60, level: str = "Все", system: str = "Все",
     except ProgrammingError as e:
         if "relation \"integration_logs\" does not exist" in str(e) or "UndefinedTable" in str(e):
             return "TABLE_NOT_EXISTS"
-        else:
-            st.error(f"Ошибка в SQL-запросе: {e}")
-            return pd.DataFrame()
+        return f"ERROR: {e}"
     except Exception as e:
-        st.error(f"Не удалось загрузить логи из базы данных: {e}")
-        return pd.DataFrame()
+        return f"ERROR: {e}"
+
+
+@st.cache_data(ttl=POLL_SECONDS)
+def load_logs(minutes: int = 60, level: str = "Все", system: str = "Все",
+              status: str = "Все", step_like: str = "", run_id: str = "", limit: int = None):
+    """Загружает логи из базы данных с фильтрами."""
+    if limit is None:
+        limit = PAGE_SIZE
+
+    query_params = {
+        "mins": minutes,
+        "level": level,
+        "system": system,
+        "status": status,
+        "step_like": step_like,
+        "run_id": run_id,
+        "limit": limit
+    }
+
+    return fetch_logs_safe(query_params)
 
 
 # --- Интерфейс ---
@@ -214,7 +239,7 @@ if st.button("🔄 Обновить логи"):
     st.cache_data.clear()
 
 # Загрузка логов с фильтрами
-logs_df = load_logs(
+logs_result = load_logs(
     minutes=minutes,
     level=level_filter,
     system=system_filter,
@@ -223,17 +248,33 @@ logs_df = load_logs(
     run_id=run_id_filter
 )
 
-if logs_df == "TABLE_NOT_EXISTS":
-    st.error("⚠️ Таблица логов `integration_logs` не создана")
-    st.markdown("""
-    Таблица для хранения логов отсутствует в базе данных.
-    Это может произойти если миграции не были применены или таблица была удалена.
-    """)
-    if st.button("🔧 Создать таблицу логов сейчас", use_container_width=True):
-        create_logs_table()
-elif isinstance(logs_df, pd.DataFrame) and not logs_df.empty:
-    st.dataframe(logs_df, use_container_width=True)
-    st.caption(f"Показано {len(logs_df)} записей за последние {minutes} минут")
+if isinstance(logs_result, str):
+    # строковые статусы/ошибки
+    if logs_result == "TABLE_NOT_EXISTS":
+        st.warning("Таблица логов `integration_logs` отсутствует. Создать?")
+        if st.button("🔧 Создать таблицу логов сейчас", use_container_width=True):
+            create_logs_table()
+    elif logs_result.startswith("ERROR:"):
+        st.error(f"Ошибка при получении логов: {logs_result[6:]}")
+    else:
+        st.error(f"Неожиданный результат: {logs_result}")
+
+elif isinstance(logs_result, pd.DataFrame):
+    # нормальный рендер
+    if logs_result.empty:
+        st.info("За выбранный период записей нет.")
+    else:
+        st.dataframe(logs_result, use_container_width=True)
+        st.caption(f"Показано {len(logs_result)} записей за последние {minutes} минут")
 else:
-    st.warning("Логи отсутствуют или не удалось их загрузить за указанный период.")
+    # попробуем привести иные структуры к DataFrame, чтобы не падать
+    try:
+        df = pd.DataFrame(logs_result)
+        if df.empty:
+            st.info("За выбранный период записей нет.")
+        else:
+            st.dataframe(df, use_container_width=True)
+            st.caption(f"Показано {len(df)} записей за последние {minutes} минут")
+    except Exception as e:
+        st.error(f"Неожиданный тип данных журнала: {type(logs_result)} — {e}")
 
