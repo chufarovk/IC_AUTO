@@ -1,5 +1,5 @@
 ## Этап 1: Базовый образ, общий для всех этапов
-FROM python:3.11-slim as base
+FROM python:3.11-slim-bookworm as base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -15,10 +15,15 @@ WORKDIR /app
 ## Этап 2: Builder для установки зависимостей (включая dev для Streamlit)
 FROM base as builder
 
-RUN apt-get update && apt-get install --no-install-recommends -y \
-    build-essential \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries; \
+    echo 'Acquire::http::Timeout "30";' > /etc/apt/apt.conf.d/80-timeout; \
+    for i in 1 2 3 4 5; do \
+      apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libpq-dev \
+      && break || (echo "apt failed, retry $i/5" && sleep 5); \
+    done; \
+    rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml poetry.lock ./
 # Для админки ставим все зависимости, включая dev, так как streamlit там
@@ -40,4 +45,3 @@ USER app
 
 # Запускаем Streamlit, используя python из .venv
 CMD ["./.venv/bin/python", "-m", "streamlit", "run", "admin_panel/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
-

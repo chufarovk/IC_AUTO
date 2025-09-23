@@ -7,6 +7,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Align integration_logs ORM and migrations with UUID/JSONB types to restore DB logging (Task009).
 - **✅ ЗАВЕРШЁН Task009: Исправлена критическая ошибка в админ-панели с сравнением DataFrame и строки:**
   - **Безопасный рендер логов:** заменена проблемная логика сравнения `logs_df == "TABLE_NOT_EXISTS"` на `isinstance()` проверки
   - **Функция fetch_logs_safe():** добавлена обёртка для безопасного получения логов с типизированными возвращаемыми значениями

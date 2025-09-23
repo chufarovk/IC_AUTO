@@ -13,7 +13,7 @@ services:
     restart: always
 
   app:
-    image: ghcr.io/your-github-username/your-repo-name/app:latest # TODO: replace with real image path (ghcr.io/<owner>/<repo>/app:latest)
+    build: .
     container_name: bisnesmedia_app
     env_file:
       - .env
@@ -24,7 +24,9 @@ services:
     restart: always
 
   admin_panel:
-    image: ghcr.io/your-github-username/your-repo-name/admin:latest # TODO: replace with real image path (ghcr.io/<owner>/<repo>/admin:latest)
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
     container_name: bisnesmedia_admin
     env_file:
       - .env

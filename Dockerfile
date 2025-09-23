@@ -1,5 +1,5 @@
 ## Stage 1: Base image shared by all stages
-FROM python:3.11-slim as base
+FROM python:3.11-slim-bookworm as base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -15,10 +15,15 @@ WORKDIR /app
 ## Stage 2: Builder for dependencies
 FROM base as builder
 
-RUN apt-get update && apt-get install --no-install-recommends -y \
-    build-essential \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries; \
+    echo 'Acquire::http::Timeout "30";' > /etc/apt/apt.conf.d/80-timeout; \
+    for i in 1 2 3 4 5; do \
+      apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libpq-dev \
+      && break || (echo "apt failed, retry $i/5" && sleep 5); \
+    done; \
+    rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml poetry.lock ./
 # Install only runtime deps for the API app
@@ -51,4 +56,3 @@ USER app
 
 # Run prestart script then start Uvicorn
 CMD ["sh", "-c", "./.venv/bin/python prestart.py && exec ./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 80"]
-

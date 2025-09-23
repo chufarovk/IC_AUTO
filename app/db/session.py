@@ -1,26 +1,31 @@
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
+from collections.abc import AsyncIterator
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
 from app.core.config import settings
 
-# Создаем асинхронный "движок" для взаимодействия с БД
-async_engine = create_async_engine(
+
+engine = create_async_engine(
     settings.database_url,
-    pool_pre_ping=True,  # Проверяет соединение перед использованием
-    echo=False,  # Установите в True для отладки SQL-запросов
+    pool_pre_ping=True,
+    echo=False,
 )
 
-# Создаем фабрику асинхронных сессий
-AsyncSessionFactory = sessionmaker(
-    bind=async_engine,
+async_session_factory = async_sessionmaker(
+    engine,
+    expire_on_commit=False,
     class_=AsyncSession,
-    expire_on_commit=False,  # Важно для FastAPI
 )
 
+# Backward compatible aliases for existing call sites
+async_session = async_session_factory
+AsyncSessionFactory = async_session_factory
 
-async def get_db_session() -> AsyncSession:
-    """
-    FastAPI зависимость для получения сессии базы данных.
-    """
-    async with AsyncSessionFactory() as session:
+
+async def get_session() -> AsyncIterator[AsyncSession]:
+    async with async_session_factory() as session:
         yield session
 
+
+# Preserve legacy dependency name used across the codebase
+get_db_session = get_session
