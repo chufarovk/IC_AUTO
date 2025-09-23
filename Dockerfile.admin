@@ -34,6 +34,10 @@ FROM base as production
 
 RUN addgroup --system app && adduser --system --group app
 
+# Создаем необходимые директории для Streamlit
+RUN mkdir -p /app/.streamlit /tmp/xdg-cache && \
+    chmod -R 777 /app/.streamlit /tmp/xdg-cache
+
 # Копируем готовое виртуальное окружение
 COPY --from=builder --chown=app:app /app/.venv ./.venv
 
@@ -41,7 +45,12 @@ COPY --from=builder --chown=app:app /app/.venv ./.venv
 COPY --chown=app:app ./admin_panel ./admin_panel
 COPY --chown=app:app ./app ./app
 
+# Настройка переменных окружения для Streamlit
+ENV HOME=/app \
+    STREAMLIT_CONFIG_DIR=/app/.streamlit \
+    XDG_CACHE_HOME=/tmp/xdg-cache
+
 USER app
 
 # Запускаем Streamlit, используя python из .venv
-CMD ["./.venv/bin/python", "-m", "streamlit", "run", "admin_panel/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["./.venv/bin/python", "-m", "streamlit", "run", "admin_panel/app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]

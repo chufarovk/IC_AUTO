@@ -113,7 +113,7 @@ def fetch_logs_safe(params: dict):
             log_level,
             message
         FROM integration_logs
-        WHERE ts >= NOW() - INTERVAL :minutes || ' minutes'
+        WHERE ts >= NOW() - make_interval(mins => :minutes)
           AND (:level = 'ВСЁ' OR log_level = :level)
           AND (:system = 'ВСЁ' OR external_system = :system)
           AND (:status = 'ВСЁ' OR status = :status)
@@ -159,11 +159,11 @@ col1, col2 = st.columns(2)
 
 with col1:
     warehouse_id = st.text_input("ID склада (опционально):", placeholder="Например: Юрловский")
-    if st.button("Запустить внутреннее пополнение", use_container_width=True):
+    if st.button("Запустить внутреннее пополнение", width="stretch"):
         trigger_replenishment(warehouse_id)
 
 with col2:
-    st.button("Сформировать внешние заказы (в разработке)", disabled=True, use_container_width=True)
+    st.button("Сформировать внешние заказы (в разработке)", disabled=True, width="stretch")
     st.caption("Функция появится позже")
 
 st.divider()
@@ -200,7 +200,7 @@ logs_result = load_logs(
 
 if isinstance(logs_result, str) and logs_result == "TABLE_NOT_EXISTS":
     st.warning("Таблица `integration_logs` отсутствует. Примените миграции.")
-    if st.button("Создать таблицу логов", use_container_width=True):
+    if st.button("Создать таблицу логов", width="stretch"):
         create_logs_table()
 elif isinstance(logs_result, str) and logs_result.startswith("ERROR:"):
     st.error(f"Ошибка при выборке логов: {logs_result[6:]}")
@@ -211,7 +211,7 @@ elif logs_result is None:
 elif isinstance(logs_result, pd.DataFrame) and logs_result.empty:
     st.info("Нет записей за выбранный период.")
 elif isinstance(logs_result, pd.DataFrame):
-    st.dataframe(logs_result, use_container_width=True)
+    st.dataframe(logs_result, width="stretch")
     st.caption(f"Показано {len(logs_result)} записей за последние {minutes} минут.")
 else:
     try:
@@ -219,7 +219,7 @@ else:
         if df.empty:
             st.info("Нет записей за выбранный период.")
         else:
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width="stretch")
             st.caption(f"Показано {len(df)} записей за последние {minutes} минут.")
     except Exception as exc:
         st.error(f"Не удалось отобразить результат. Тип: {type(logs_result)}. Ошибка: {exc}")

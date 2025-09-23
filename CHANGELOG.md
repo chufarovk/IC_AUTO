@@ -7,6 +7,19 @@
 ## [Unreleased]
 
 ### Fixed
+- **✅ ЗАВЕРШЁН Task012: Финальная доводка миграций, логов и админки:**
+  - **Исправлен Alembic multi-head конфликт:** создана merge-миграция `20250923130000_merge_integration_logs_heads.py` для объединения веток, состояние БД приведено к единому head через `alembic stamp head`
+  - **Подтверждена схема integration_logs:** колонка `job_name` присутствует и работает корректно, логи пишутся без ошибок
+  - **Устранены предупреждения Streamlit:** заменен устаревший `use_container_width=True` на новый синтаксис `width="stretch"` во всех компонентах админки
+  - **Подтверждена корректность SQL:** фильтр по времени использует правильный синтаксис `make_interval(mins => :minutes)` для PostgreSQL
+  - **Подтверждена работоспособность outbox_events:** таблица существует и фоновые джобы выполняются без ошибок
+  - **Созданы безопасные индексы:** добавлены индексы `ix_integration_logs_ts`, `ix_integration_logs_created_at`, `ix_integration_logs_ts_notnull` через миграцию `20250923140000_add_safe_time_indexes.py`
+  - **Все критерии приёмки выполнены:** `alembic current` совпадает с `heads`, логи пишутся без ошибок, админка работает без предупреждений, джобы стабильно отрабатывают
+- **✅ ЗАВЕРШЁН Task011: Довести логирование и админку до идеала:**
+  - **Исправлена отсутствующая колонка job_name:** добавлена колонка `job_name VARCHAR NULL` в таблицу `integration_logs` через быстрый хотфикс и миграцию `20250923113000_add_job_name_to_integration_logs.py`
+  - **Исправлен SQL-запрос в админке:** заменен некорректный синтаксис `INTERVAL :minutes || ' minutes'` на `make_interval(mins => :minutes)` для правильной работы с PostgreSQL
+  - **Исправлен PermissionError в Streamlit:** добавлены переменные окружения `HOME=/app`, `STREAMLIT_CONFIG_DIR=/app/.streamlit`, `XDG_CACHE_HOME=/tmp/xdg-cache` и флаг `--server.headless=true` в Dockerfile.admin
+  - **Все исправления протестированы:** подтверждена корректная работа вставки логов, SQL-запросов админки и запуска Streamlit без ошибок прав доступа
 - **✅ ЗАВЕРШЁН Task010: Полная синхронизация миграций, ORM и Docker инфраструктуры:**
   - **Исправлена конфигурация Pydantic Settings:** добавлен `extra="ignore"` для совместимости с дополнительными переменными окружения
   - **Убраны дублированные поля:** исправлены дублирующие определения `MOYSKLAD_ORG_UUID` и `MOYSKLAD_AGENT_UUID` в `app/core/config.py`
