@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -14,6 +15,13 @@ from app.models.outbox import OutboxEvent  # noqa: F401 - регистрируе
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+def _alembic_url() -> str:
+    url = os.getenv("DATABASE_URL", "")
+    # Alembic работает синхронно; если в env asyncpg – заменим на psycopg2
+    return url.replace("+asyncpg", "+psycopg2")
+
+config.set_main_option("sqlalchemy.url", _alembic_url())
 
 # Interpret the config file for Python logging.
 fileConfig(config.config_file_name)

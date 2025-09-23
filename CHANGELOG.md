@@ -7,6 +7,18 @@
 ## [Unreleased]
 
 ### Fixed
+- **✅ ЗАВЕРШЁН Task008: Критические проблемы отсутствующих таблиц БД полностью решены:**
+  - **Гарантированное создание всех таблиц:** устранена ошибка `relation "integration_logs" does not exist` и других missing table ошибок
+    - ✅ Выполнен срочный хотфикс: создание таблицы integration_logs прямо в БД
+    - ✅ Создана миграция Alembic 20240922_create_integration_logs.py с полной схемой
+    - ✅ Настроен автозапуск миграций в start.sh с safety DDL fallback
+    - ✅ Конфигурация ENV приведена к контейнерным адресам (db вместо localhost)
+    - ✅ Alembic правильно читает DATABASE_URL из ENV с подменой asyncpg→psycopg2
+  - **Дополнены переменные окружения:** добавлены недостающие МойСклад и Telegram переменные для запуска приложения
+    - MOYSKLAD_API_TOKEN, MOYSKLAD_ORG_UUID, MOYSKLAD_AGENT_UUID
+    - TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+  - **APScheduler работает стабильно:** процесс outbox_events_job выполняется без ошибок отсутствующих таблиц
+  - **Админ-панель работает корректно:** нет предупреждений "Таблица логов не создана"
 - **Исправлены проблемы связности admin → app и миграций БД (Task007):**
   - **Connection refused в админ-панели:** исправлен неверный порт для межконтейнерного обращения admin → app
     - Изменен `ADMIN_APP_URL` с `http://app:8000` на `http://app` (app слушает внутри контейнера порт 80, мапится наружу как 8000:80)
