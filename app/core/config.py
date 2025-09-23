@@ -33,8 +33,6 @@ class Settings(BaseSettings):
     MOYSKLAD_ORG_UUID: str
     MOYSKLAD_AGENT_UUID: str
     RUN_MIGRATIONS_ON_STARTUP: bool = True
-    MOYSKLAD_ORG_UUID: str
-    MOYSKLAD_AGENT_UUID: str
 
     # Настройки Telegram
     TELEGRAM_BOT_TOKEN: str
@@ -43,7 +41,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        case_sensitive=True
+        case_sensitive=True,
+        extra="ignore"
     )
 
 

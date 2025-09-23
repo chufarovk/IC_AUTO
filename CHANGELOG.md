@@ -7,6 +7,15 @@
 ## [Unreleased]
 
 ### Fixed
+- **✅ ЗАВЕРШЁН Task010: Полная синхронизация миграций, ORM и Docker инфраструктуры:**
+  - **Исправлена конфигурация Pydantic Settings:** добавлен `extra="ignore"` для совместимости с дополнительными переменными окружения
+  - **Убраны дублированные поля:** исправлены дублирующие определения `MOYSKLAD_ORG_UUID` и `MOYSKLAD_AGENT_UUID` в `app/core/config.py`
+  - **Миграция типов БД:** создана миграция `20250923093000_align_integration_logs_types.py` для приведения типов `run_id/request_id/job_id` к UUID и `payload/details` к JSONB
+  - **Alembic в контейнере:** подтверждена корректная работа `.venv/bin/python -m alembic` в `start.sh`
+  - **async_session импорт:** подтверждена корректная работа импорта `async_session` в `logger_service.py:82`
+  - **Админ-панель DataFrame:** подтверждено использование безопасной типизированной проверки `isinstance(logs_result, str)` вместо прямого сравнения
+  - **Docker apt-get ретраи:** подтверждено наличие устойчивой сборки с 5 попытками и таймаутами в `Dockerfile:18-26`
+  - **docker-compose.dev.yml:** подтверждено отсутствие устаревшего поля `version`
 - Align integration_logs ORM and migrations with UUID/JSONB types to restore DB logging (Task009).
 - **✅ ЗАВЕРШЁН Task009: Исправлена критическая ошибка в админ-панели с сравнением DataFrame и строки:**
   - **Безопасный рендер логов:** заменена проблемная логика сравнения `logs_df == "TABLE_NOT_EXISTS"` на `isinstance()` проверки
