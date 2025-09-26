@@ -71,7 +71,7 @@ async def log_event(*, step: str, status: str, external_system: str | None = Non
                     payload_hash: str | None = None, details: dict[str, Any] | None = None,
                     run_id: str | UUID | None = None, request_id: str | UUID | None = None,
                     job_id: str | UUID | None = None, job_name: str | None = None,
-                    payload: dict[str, Any] | None = None):
+                    payload: dict[str, Any] | None = None, message: str | None = None):
     """
     Centralized function to log standardized events to integration_logs table.
     Uses new observability fields for structured logging.
@@ -101,6 +101,10 @@ async def log_event(*, step: str, status: str, external_system: str | None = Non
         "details": _ensure_jsonable(details or {}),
         "payload": _ensure_jsonable(payload),
     }
+
+    # Add message if provided
+    if message is not None:
+        rec["message"] = str(message)
 
     async with async_session() as sess:
         await sess.execute(insert(IntegrationLog).values(**rec))

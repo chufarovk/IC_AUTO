@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.core.logging import configure_logging, set_run_id
 from app.core.migrations_health import assert_single_head_or_explain, log_migration_status
 from app.api.v1.endpoints import replenishment, admin
+from app.api import debug_onec
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from app.background.jobs import process_outbox_events_job, run_internal_replenishment_job
@@ -71,4 +72,5 @@ async def health_db():
         raise HTTPException(status_code=503, detail={"db": "error", "message": str(e)})
 
 app.include_router(replenishment.router, prefix="/api/v1", tags=["Triggers"])
-app.include_router(admin.router, tags=["Admin"]) 
+app.include_router(admin.router, tags=["Admin"])
+app.include_router(debug_onec.router) 

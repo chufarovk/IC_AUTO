@@ -165,6 +165,10 @@ def _choose_name(item: Dict[str, Any], fallback_id: str | None) -> str:
             return str(item[k])
         if k in item and isinstance(item[k], dict) and "name" in item[k]:
             return str(item[k]["name"])
+    # Fallback to SKU if name is not found
+    for k in ("sku", "article", "art", "артикул"):
+        if k in item and isinstance(item[k], (str,int,float)):
+            return f"SKU-{item[k]}"
     return fallback_id or "UNKNOWN"
 
 def normalize_deficit_payload(text: str, lossy: bool | None = None) -> List[Dict[str, Any]]:
@@ -205,6 +209,8 @@ def normalize_deficit_payload(text: str, lossy: bool | None = None) -> List[Dict
                 canon["id"] = str(v)
             elif kl in ("name", "productname", "наименование"):
                 canon["name"] = str(v)
+            elif kl in ("sku", "article", "art", "артикул"):
+                canon["sku"] = str(v)
             elif kl in ("min_stock", "minstock", "min", "minimum", "минимальныйзапас", "минимальноеколичествозапаса"):
                 n = _coerce_num(v)
                 if n is not None:
@@ -217,7 +223,7 @@ def normalize_deficit_payload(text: str, lossy: bool | None = None) -> List[Dict
                 n = _coerce_num(v)
                 if n is not None:
                     canon["current_stock"] = n
-            elif kl in ("deficit", "дефицит"):
+            elif kl in ("deficit", "need_to_order", "quantity_to_order", "количествокзаказу", "кколичествузаказа", "дефицит"):
                 n = _coerce_num(v)
                 if n is not None:
                     canon["deficit"] = n

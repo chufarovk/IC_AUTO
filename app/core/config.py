@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     API_1C_USER: str
     API_1C_PASSWORD: str
 
+    # Debug settings
+    DEBUG_ONEC_TOKEN: str | None = Field(default=None)  # задаём в .env, чтобы включить debug
+    ONEC_BASE_URL: str = Field(..., env="ONEC_BASE_URL")
+    LOG_ONEC_RAW: bool = Field(default=False, env="LOG_ONEC_RAW")
+
     MOYSKLAD_API_TOKEN: str
     MOYSKLAD_ORG_UUID: str
     MOYSKLAD_AGENT_UUID: str

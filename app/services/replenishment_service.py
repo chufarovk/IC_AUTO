@@ -47,14 +47,14 @@ class ReplenishmentService:
         return result.scalars().first() is not None
 
     @log_step("replenishment.run")
-    async def run_internal_replenishment(self, warehouse_id: str = None):
+    async def run_internal_replenishment(self, warehouse_id: str = None, bypass_filter: bool = False):
         run_id = set_run_id(str(uuid.uuid4()))
         warehouse_id = warehouse_id or self.YURLOVSKIY_WAREHOUSE_ID
-        logger.info("START replenishment", extra={"extra": {"warehouse_id": warehouse_id}})
+        logger.info("START replenishment", extra={"extra": {"warehouse_id": warehouse_id, "bypass_filter": bypass_filter}})
 
         try:
             # 1) Получаем дефицит
-            items = await self._fetch_and_filter_deficit(warehouse_id)
+            items = await self._fetch_and_filter_deficit(warehouse_id, bypass_filter)
             if not items:
                 logger.info("No items to process", extra={"extra": {"warehouse_id": warehouse_id}})
                 await log_event(step="replenishment", status="END", details={"reason": "no_deficit", "warehouse_id": warehouse_id})
@@ -75,7 +75,9 @@ class ReplenishmentService:
             await self.ms_client.close()
 
     @log_step("replenishment.fetch_deficit")
-    async def _fetch_and_filter_deficit(self, warehouse_id: str):
+    async def _fetch_and_filter_deficit(self, warehouse_id: str, bypass_filter: bool = False):
+        # Get MIN_DEFICIT threshold from environment
+        MIN_DEFICIT = int(os.getenv("MIN_DEFICIT", 1))
         try:
             raw_items = await self.one_s_client.get_deficit_products(warehouse_id)
         except IntegrationError as e:
@@ -83,6 +85,19 @@ class ReplenishmentService:
             await log_event(step="replenishment.fetch_deficit", status="ERROR",
                            external_system="ONEC", details={"error": str(e)})
             raise
+
+        # Telemetry: log raw 1C response if enabled
+        if settings.LOG_ONEC_RAW:
+            await log_event(
+                step="replenishment.fetch_deficit.raw",
+                status="INFO",
+                details={
+                    "total": len(raw_items) if isinstance(raw_items, list) else None,
+                    "sample": (raw_items[:3] if isinstance(raw_items, list) else raw_items),
+                },
+                payload=(raw_items if isinstance(raw_items, list) and len(raw_items) <= 300 else None),
+                message="Captured raw items from 1C"
+            )
 
         total = len(raw_items)
         logger.info("Fetched items", extra={"extra": {"total": total, "sample": (raw_items[0] if total else None)}})
@@ -94,41 +109,83 @@ class ReplenishmentService:
                            external_system="ONEC", details={"message": "No deficit items", "warehouse_id": warehouse_id})
             return []
 
-        kept, dropped_no_id, dropped_no_deficit, dropped_invalid = [], 0, 0, 0
-        for it in raw_items:
-            # Валидация обязательных полей согласно Task006.md: id, name, min_stock, current_stock
-            validation_errors = []
+        # Quick tracing: log input before filtering
+        await log_event(step="replenishment.filter_input", status="INFO",
+                       details={"in_count": len(raw_items), "sample": raw_items[:3]})
 
-            if not it.get("id"):
-                validation_errors.append("missing id")
-            if not it.get("name"):
-                validation_errors.append("missing name")
-            if "min_stock" not in it:
-                validation_errors.append("missing min_stock")
-            if "current_stock" not in it:
-                validation_errors.append("missing current_stock")
+        # Handle bypass filter mode
+        if bypass_filter:
+            logger.info("Filter bypass mode enabled", extra={"extra": {"total": len(raw_items)}})
+            # In bypass mode, output equals input
+            await log_event(step="replenishment.filter_output", status="INFO",
+                           details={"out_count": len(raw_items), "sample": raw_items[:3]})
+            await log_event(
+                step="replenishment.filter_summary",
+                status="INFO",
+                details={
+                    "total": len(raw_items),
+                    "kept": len(raw_items),
+                    "rejected": 0,
+                    "min_deficit": MIN_DEFICIT,
+                    "mode": "bypass",
+                },
+                message="Filter bypass - no filtering applied"
+            )
+            return raw_items
 
-            if validation_errors:
-                dropped_invalid += 1
-                logger.debug("drop:validation_failed", extra={"extra": {"item": it, "errors": validation_errors}})
-                continue
+        # Enhanced filter tracking with detailed rejection reasons
+        rejections = []
+        kept = []
 
-            iid = it.get("id")
-            deficit = float(it.get("deficit") or 0)
+        for idx, it in enumerate(raw_items):
+            reason = None
+            pid = it.get("id")
+            deficit = it.get("deficit")
 
-            if deficit <= 0:
-                dropped_no_deficit += 1
-                logger.debug("drop:no_deficit", extra={"extra": {"item": it}})
+            # Check for missing or non-string ID
+            if not pid or not isinstance(pid, str):
+                reason = "missing_or_non_string_id"
+            # Check deficit is a number
+            elif not isinstance(deficit, (int, float)):
+                reason = "deficit_not_number"
+            # Check deficit meets minimum threshold
+            elif deficit < MIN_DEFICIT:
+                reason = "deficit_below_threshold"
+            # Additional domain validation checks
+            elif not it.get("name"):
+                reason = "missing_name"
+            elif "min_stock" not in it:
+                reason = "missing_min_stock"
+            elif "current_stock" not in it:
+                reason = "missing_current_stock"
+
+            if reason:
+                rejections.append({"idx": idx, "id": pid, "reason": reason})
                 continue
 
             kept.append(it)
 
+        # Quick tracing: log output after filtering
+        await log_event(step="replenishment.filter_output", status="INFO",
+                       details={"out_count": len(kept), "sample": kept[:3]})
+
+        # Log detailed filter summary
+        await log_event(
+            step="replenishment.filter_summary",
+            status="INFO",
+            details={
+                "total": len(raw_items),
+                "kept": len(kept),
+                "rejected": len(rejections),
+                "min_deficit": MIN_DEFICIT,
+                "mode": "normal",
+                "rejections_sample": rejections[:20],
+            },
+            message="Filter breakdown"
+        )
+
         logger.info("Filter summary", extra={"extra": {
-            "total": total, "kept": len(kept), "dropped_no_id": dropped_no_id,
-            "dropped_no_deficit": dropped_no_deficit, "dropped_invalid": dropped_invalid}})
-        await log_event(step="replenishment.filter", status="INFO",
-                       details={"total": total, "kept": len(kept), "dropped_no_id": dropped_no_id,
-                               "dropped_no_deficit": dropped_no_deficit, "dropped_invalid": dropped_invalid})
+            "total": len(raw_items), "kept": len(kept), "rejected": len(rejections)}})
         return kept
 
     @log_step("replenishment.plan")
